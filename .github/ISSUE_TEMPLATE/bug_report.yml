@@ -19,7 +19,7 @@ body:
     validations:
       required: true
   - type: input
-    id: go-version
+    id: java-version
     attributes:
-      label: Go version
-      placeholder: go1.26.5
+      label: Java version
+      placeholder: 25.0.2

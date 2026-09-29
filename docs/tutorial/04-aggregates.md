@@ -1,6 +1,6 @@
 # 4. Aggregates and their boundaries
 
-This is the chapter where DDD stops being "nice structs" and starts being architecture. **Aggregates** are the answer to two questions every growing codebase eventually faces:
+This is the chapter where DDD stops being "nice classes" and starts being architecture. **Aggregates** are the answer to two questions every growing codebase eventually faces:
 
 1. When I change this object, what else must change *in the same transaction*?
 2. When I load this object, how much of the object graph comes with it?
@@ -13,23 +13,25 @@ An aggregate is a cluster of objects that change together, with one entity as th
 
 In the marketplace, `Seller` and `Product` are **separate aggregates**. Look at what `Product` stores:
 
-```go
-type Product struct {
-    Id        uuid.UUID
-    CreatedAt time.Time
-    UpdatedAt time.Time
-    Name      string
-    Price     Money
-    SellerId  uuid.UUID   // reference by Id — not: Seller Seller
+```java
+public final class Product {
 
-    domainEvents []events.DomainEvent
+    private final UUID id;
+    private final Instant createdAt;
+    private Instant updatedAt;
+    private String name;
+    private Money price;
+    private UUID sellerId;   // reference by Id — not: Seller seller
+
+    private final List<DomainEvent> domainEvents;
+    // ...
 }
 ```
 
-`SellerId uuid.UUID`, not an embedded `Seller`. An earlier version of this template *did* embed the full seller, and it caused exactly the problems the rule predicts:
+`UUID sellerId`, not an embedded `Seller`. An earlier version of the Go original of this template *did* embed the full seller — in JPA terms, a `@ManyToOne(cascade = CascadeType.ALL) Seller seller` field — and it caused exactly the problems the rule predicts:
 
 - **Torn ownership.** Two copies of a seller's name in memory — one on the seller aggregate, one inside each product — and no answer to which one is true after an update.
-- **Transactional creep.** Renaming a seller technically modified every product embedding it. Does that update products' `UpdatedAt`? Lock their rows? Nobody chose; the ORM chose.
+- **Transactional creep.** Renaming a seller technically modified every product embedding it. Does that update products' `updatedAt`? Lock their rows? Nobody chose; the ORM chose.
 - **Loading bloat.** You can't fetch a product without dragging its seller along, whether the use case needs it or not.
 
 With an Id reference, each aggregate has one owner, one transaction, one loading story. If a use case needs the seller's details alongside a product, the *application layer* loads both aggregates explicitly — visible, intentional, and cheap to review.
@@ -43,13 +45,15 @@ An invariant that must hold at every commit belongs inside one aggregate. A rule
 Work the marketplace examples:
 
 - *"A product's price must be positive."* Involves only the product. Inside the `Product` aggregate — enforced in `validate()`.
-- *"A product must belong to a seller that passed validation."* Spans both. The template enforces it **at creation time** through the type system — `NewProduct` demands a `ValidatedSeller`:
+- *"A product must belong to a seller that passed validation."* Spans both. The template enforces it **at creation time** through the type system — `Product.create` demands a `ValidatedSeller`:
 
-```go
-// NewProduct requires a ValidatedSeller so a product can only ever be
-// created against a seller that passed validation. The product stores just
-// the seller's Id: sellers are a separate aggregate and must not be embedded.
-func NewProduct(name string, price Money, seller ValidatedSeller) *Product {
+```java
+/**
+ * Requires a {@link ValidatedSeller}, so a product can only ever be created
+ * against a seller that passed validation. The product keeps just the
+ * seller's id: sellers are a separate aggregate and must not be embedded.
+ */
+public static Product create(String name, Money price, ValidatedSeller seller) {
 ```
 
 Note the honesty in that design: it guarantees the seller was valid *when the product was created*. It does not guarantee the seller still exists a week later — that's a cross-aggregate concern, deliberately not a hard invariant. If the business decides deleting a seller must handle their products, that's a use case (delete them? orphan them? block deletion?), implemented in the application layer or reacting to a `SellerDeleted` domain event. Choosing *eventual* consistency between aggregates isn't a compromise; it's the design telling the truth about what the business actually requires.
@@ -71,12 +75,12 @@ A checklist I actually use when drawing a boundary:
 
 Aggregate boundaries dictate repository shape, which is why [chapter 5](05-repositories.md) comes next. One repository per aggregate root — `ProductRepository`, `SellerRepository` — and no repository for anything inside a boundary. You never load "a product's events" or "half a seller"; you load aggregates, whole, by their root.
 
-The payoff for the ORM-weary: no lazy loading, no N+1 surprises, no accidentally-saved object graphs. Each repository reads and writes one small cluster, and the SQL underneath (sqlc-generated, in this template) is boring and inspectable.
+The payoff for the ORM-weary: no lazy loading, no N+1 surprises, no accidentally-saved object graphs. Each repository reads and writes one small cluster, and the SQL underneath (hand-written, run through `JdbcClient`, in this template) is boring and inspectable.
 
 ## Try it
 
-1. Find the commit-worthy invariants for `Seller` in [`seller.go`](https://github.com/sklinkert/go-ddd/blob/main/internal/domain/entities/seller.go). It's a short list — that's a feature.
-2. Add a `Review` concept: a buyer reviews a product. Own aggregate or inside `Product`? Work the checklist: what invariant would force reviews into the product's transaction? (I can't find one — reviews are their own aggregate with a `ProductId`.)
+1. Find the commit-worthy invariants for `Seller` in [`Seller.java`](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/domain/entities/Seller.java). It's a short list — that's a feature.
+2. Add a `Review` concept: a buyer reviews a product. Own aggregate or inside `Product`? Work the checklist: what invariant would force reviews into the product's transaction? (I can't find one — reviews are their own aggregate with a `productId`.)
 3. Sketch what "deleting a seller deletes their products" looks like as an application-layer use case versus a domain event handler. Which one survives the introduction of a second delivery mechanism (say, a CLI admin tool) without duplication?
 
 Next: [repositories](05-repositories.md) — the interface lives in the domain, the SQL lives in infrastructure, and the dependency arrow points the way you want.

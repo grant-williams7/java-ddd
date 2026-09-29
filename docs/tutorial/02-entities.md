@@ -4,119 +4,122 @@ An **entity** is a domain object with identity and a life cycle. Two products wi
 
 The anemic version — the one most codebases ship — looks like this:
 
-```go
-// The struct anyone can corrupt.
-type Product struct {
-    Id    uuid.UUID
-    Name  string
-    Price float64
+```java
+// The class anyone can corrupt.
+public class Product {
+    private UUID id;
+    private String name;
+    private double price;
+
+    // ...and a public getter and setter for every field
 }
 ```
 
-Every field public, no constructor, no rules. The invariants exist only in the heads of the developers and in scattered `if` statements across handlers, services, and jobs. Any code can produce a product with an empty name and a negative price, and the compiler will help it do so.
+Every field settable, a no-argument constructor, no rules. The invariants exist only in the heads of the developers and in scattered `if` statements across controllers, services, and jobs. Any code can produce a product with an empty name and a negative price, and the compiler will help it do so.
 
-## Rule one: constructors, not struct literals
+## Rule one: factories, not setters
 
-The template's [`Product`](https://github.com/sklinkert/go-ddd/blob/main/internal/domain/entities/product.go) is built through a constructor that establishes every invariant at birth:
+The template's [`Product`](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/domain/entities/Product.java) has private fields, a private constructor, and a static factory that establishes every invariant at birth:
 
-```go
-func NewProduct(name string, price Money, seller ValidatedSeller) *Product {
-    product := &Product{
-        Id:        uuid.Must(uuid.NewV7()),
-        CreatedAt: time.Now(),
-        UpdatedAt: time.Now(),
-        Name:      name,
-        Price:     price,
-        SellerId:  seller.Id,
-    }
+```java
+public static Product create(String name, Money price, ValidatedSeller seller) {
+    Instant now = Timestamps.now();
+    UUID sellerId = seller.seller().getId();
+    Product product = new Product(Uuids.newV7(), now, now, name, price, sellerId, List.of());
 
-    product.recordEvent(events.NewProductCreated(
-        product.Id, name, price.MinorUnits(), string(price.Currency()), seller.Id))
+    product.recordEvent(ProductCreated.of(
+            product.id, name, price.minorUnits(), price.currency().code(), sellerId));
 
-    return product
+    return product;
 }
 ```
 
 Three things are decided here, once, for the whole system:
 
-1. **Identity is assigned by the domain.** A UUIDv7 (time-ordered, so it indexes nicely) is generated in the constructor — not by the database, not by the caller. The product has its identity before it ever touches Postgres.
+1. **Identity is assigned by the domain.** A UUIDv7 (time-ordered, so it indexes nicely) is generated in the factory — not by the database, not by the caller. The product has its identity before it ever touches Postgres.
 2. **The price is a `Money`**, which as we'll see in [chapter 3](03-value-objects.md) cannot exist in an invalid state.
-3. **The seller parameter is a `ValidatedSeller`.** Not a `Seller` — a `ValidatedSeller`. You literally cannot call this function with an unvalidated one; the type doesn't fit.
+3. **The seller parameter is a `ValidatedSeller`.** Not a `Seller` — a `ValidatedSeller`. You literally cannot call this method with an unvalidated one; the type doesn't fit.
 
 That third point is the template's signature pattern, so let's take it apart.
 
 ## The validated-entity pattern
 
-The problem it solves: in most codebases, "has this struct been validated?" is a question with no answer. A `*Product` in your hand might have come from the constructor, from a JSON unmarshal, from a half-updated cache — you don't know, so defensive code re-validates everywhere, and the checks drift apart.
+The problem it solves: in most codebases, "has this object been validated?" is a question with no answer. A `Product` in your hand might have come from the factory, from JSON deserialization, from a half-updated cache — you don't know, so defensive code re-validates everywhere, and the checks drift apart.
 
 The template makes validation a *type*:
 
-```go
-type ValidatedProduct struct {
-    Product
-    isValidated bool
-}
+```java
+public final class ValidatedProduct {
 
-func NewValidatedProduct(product *Product) (*ValidatedProduct, error) {
-    if err := product.validate(); err != nil {
-        return nil, err
+    private final Product product;
+
+    private ValidatedProduct(Product product) {
+        this.product = product;
     }
 
-    return &ValidatedProduct{
-        Product:     *product,
-        isValidated: true,
-    }, nil
+    /** Validates a copy, so later changes to the argument can't leak in. */
+    public static ValidatedProduct of(Product product) {
+        Product copy = product.copy();
+        copy.validate();
+        return new ValidatedProduct(copy);
+    }
+
+    public Product product() {
+        return product;
+    }
+}
+```
+
+The constructor is private and the class is final, so the only way to obtain a `ValidatedProduct` anywhere is `ValidatedProduct.of` — and through `validate()`:
+
+```java
+void validate() {
+    if (name == null || name.isEmpty()) {
+        throw new ValidationException("name must not be empty");
+    }
+    if (price == null || price.minorUnits() == 0) {
+        throw new ValidationException("price must be greater than 0");
+    }
+    if (sellerId == null || sellerId.equals(Uuids.NIL)) {
+        throw new ValidationException("seller id must not be empty");
+    }
+    if (Timestamps.orZero(createdAt).isAfter(Timestamps.orZero(updatedAt))) {
+        throw new ValidationException("created_at must be before updated_at");
+    }
 }
 ```
 
-`isValidated` is unexported, so the only way to obtain a `ValidatedProduct` outside the `entities` package is to pass a `Product` through `NewValidatedProduct` — and through `validate()`:
-
-```go
-func (p *Product) validate() error {
-    if p.Name == "" {
-        return fmt.Errorf("%w: name must not be empty", ErrValidation)
-    }
-    if p.Price.MinorUnits() == 0 {
-        return fmt.Errorf("%w: price must be greater than 0", ErrValidation)
-    }
-    if p.SellerId == uuid.Nil {
-        return fmt.Errorf("%w: seller id must not be empty", ErrValidation)
-    }
-    if p.CreatedAt.After(p.UpdatedAt) {
-        return fmt.Errorf("%w: created_at must be before updated_at", ErrValidation)
-    }
-
-    return nil
-}
-```
+Java's access control makes this *stronger* than the pattern's Go original, where a struct embedding and an unexported flag did the job: here there's no constructor to reach for and no field to flip. `validate()` itself is package-private, so outside the `entities` package the check can only happen by going through `of`.
 
 Now look at what downstream code can demand. The repository interface takes the validated type:
 
-```go
-type ProductRepository interface {
-    Create(ctx context.Context, product *entities.ValidatedProduct) (*entities.Product, error)
+```java
+public interface ProductRepository {
+
+    Product create(ValidatedProduct product);
+
     // ...
 }
 ```
 
-The signature *is* the guarantee: nothing reaches the database without passing validation, and the compiler enforces it. No code review needed, no "did you remember to call Validate()?" comment. Forgetting is a type error.
+The signature *is* the guarantee: nothing reaches the database without passing validation, and the compiler enforces it. No code review needed, no "did you remember to call validate()?" comment. Forgetting is a type error.
 
-Note also every check wraps `ErrValidation`, a sentinel from [`errors.go`](https://github.com/sklinkert/go-ddd/blob/main/internal/domain/entities/errors.go). The REST layer maps `errors.Is(err, ErrValidation)` to a 400 without parsing message strings — the domain speaks in errors, the edge translates them.
+Note also that every check throws a [`ValidationException`](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/domain/entities/ValidationException.java), one branch of the domain's sealed `DomainException` hierarchy. The REST layer maps that type to a 400 without parsing message strings — the domain speaks in exception types, the edge translates them.
 
 ## Mutation goes through methods
 
-Entities change, and changes must re-establish invariants. So fields are mutated through methods that end in `validate()`:
+Entities change, and changes must re-establish invariants. There are no setters; fields change through methods that end in `validate()`:
 
-```go
-func (p *Product) UpdatePrice(price Money) error {
-    p.Price = price
-    p.UpdatedAt = time.Now()
+```java
+public void updatePrice(Money price) {
+    this.price = price;
+    this.updatedAt = Timestamps.now();
 
-    return p.validate()
+    validate();
 }
 ```
 
-Is this bulletproof? No — `Product` fields are exported (the persistence layer needs them), so a determined colleague can still do `p.Price = Money{}` directly. Go doesn't give us the access control to prevent that entirely without heavy ceremony. The pattern's claim is more modest and, in practice, enough: the *convenient* path and the *reviewed* path are the safe one, and the repository boundary demands the validated type. In several years of running this pattern in production code, "someone bypassed the constructor" has not been the bug. The bug was always in codebases where there was no constructor to bypass.
+Is this bulletproof? No — there's one deliberate hole: the public [`Product.reconstitute(...)`](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/domain/entities/Product.java) factory, which rebuilds a product from stored state *without* validating. Repositories need it: rows written years ago must still load after today's rules have moved on, so loading can't re-run today's validation. A determined colleague can call it with nonsense. The pattern's claim is more modest and, in practice, enough: the *convenient* path and the *reviewed* path are the safe one, and the repository boundary demands the validated type. In several years of running this pattern in production code, "someone bypassed the factory" has not been the bug. The bug was always in codebases where there was no factory to bypass.
 
 ## What about validation at the API edge?
 
@@ -129,8 +132,8 @@ The edge check is about protocol; it produces friendly 400s fast. The domain che
 
 ## Try it
 
-1. Delete the `Price.MinorUnits() == 0` check from `validate()` and run `go test ./internal/...` — watch which tests fail and read what they assert. The test suite documents the invariants.
+1. Delete the `price.minorUnits() == 0` check from `validate()` and run `make test-unit` — watch which tests fail and read what they assert. The test suite documents the invariants.
 2. Add a new rule: product names must be at most 200 characters. Notice you touch exactly two files — the entity and its test.
-3. Try to call `productRepository.Create` with a plain `*Product`. Enjoy the compile error; that error is the pattern working.
+3. Try to call `productRepository.create` with a plain `Product`. Enjoy the compile error; that error is the pattern working.
 
 Next: [value objects, starting with Money](03-value-objects.md) — the same "invalid states are unconstructible" idea, applied to values instead of identities.

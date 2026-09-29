@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: marketplace
+  main:
+    banner-mode: off
+  lifecycle:
+    timeout-per-shutdown-phase: 10s
+  datasource:
+    hikari:
+      # Fail fast when Postgres is gone, so /readyz and the endpoints answer
+      # in seconds instead of waiting out Hikari's 30 s default.
+      connection-timeout: 2000
+      validation-timeout: 1000
+
+server:
+  port: ${PORT:8080}
+  shutdown: graceful

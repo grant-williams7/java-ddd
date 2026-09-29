@@ -1,10 +1,10 @@
 # Why Domain-Driven Design makes your life easier
 
-I've been writing Go backends for over a decade, and the same three problems show up in almost every codebase I've inherited:
+I've been writing backend services for over a decade, and the same three problems show up in almost every codebase I've inherited:
 
 1. **Business logic lives in HTTP handlers.** The rule "a product needs a price above zero" is enforced in a controller, so the importer, the admin CLI, and the message consumer each get their own slightly different copy of it.
-2. **Validation is scattered and repeated.** Every function that touches a struct re-checks the same fields, because nobody can be sure whether the value in hand has been validated yet. Half the checks are missing, the other half disagree with each other.
-3. **The model is anemic.** Structs are bags of public fields. Any code anywhere can set `product.Price = -5`, and the compiler is fine with it. The "domain model" is really just the database schema with JSON tags.
+2. **Validation is scattered and repeated.** Every method that touches an object re-checks the same fields, because nobody can be sure whether the value in hand has been validated yet. Half the checks are missing, the other half disagree with each other.
+3. **The model is anemic.** Classes are bags of getters and setters — a Lombok `@Data` entity is the familiar version. Any code anywhere can call `product.setPrice(-5)`, and the compiler is fine with it. The "domain model" is really just the database schema with JPA annotations.
 
 None of these feel like emergencies on day one. They compound. A year in, nobody can answer "where is the rule that a seller must have a name?" without grepping, and every change means re-discovering which of the five validation paths actually runs.
 
@@ -24,13 +24,13 @@ That's it. Everything else in this tutorial is those five ideas applied consiste
 
 ## How this tutorial works
 
-This isn't a theory course. Every chapter is anchored to a working codebase: [sklinkert/go-ddd](https://github.com/sklinkert/go-ddd), a production-grade template that models a small marketplace where sellers list products. It ships with a REST API (Echo), PostgreSQL via pgx and sqlc, migrations, testcontainers-based integration tests, race-safe idempotent commands, and a transactional outbox for domain events.
+This isn't a theory course. Every chapter is anchored to a working codebase: [&lt;owner&gt;/java-ddd](https://github.com/<owner>/java-ddd), a production-grade template that models a small marketplace where sellers list products. It ships with a REST API (Spring MVC), PostgreSQL via JDBC and `JdbcClient`, Flyway migrations, Testcontainers-based integration tests, race-safe idempotent commands, and a transactional outbox for domain events. It's a Java and Spring Boot port of [go-ddd](https://github.com/sklinkert/go-ddd).
 
 Each chapter shows the real code, explains why it's shaped that way, and tells you which trade-offs I made and where I'd decide differently in your situation. You can clone the repo and run everything locally with one command:
 
 ```bash
-git clone https://github.com/sklinkert/go-ddd.git
-cd go-ddd
+git clone https://github.com/<owner>/java-ddd.git
+cd java-ddd
 docker compose up --build
 ```
 
@@ -38,9 +38,9 @@ The tutorial builds up in the order I'd introduce these patterns to a colleague:
 
 1. [The domain and its language](tutorial/01-the-domain.md) — what we're modelling and why the words matter
 2. [Entities that guard themselves](tutorial/02-entities.md) — constructors, invariants, and the validated-entity pattern
-3. [Value objects, starting with Money](tutorial/03-value-objects.md) — why `float64` money is a bug and what to do instead
-4. [Aggregates and their boundaries](tutorial/04-aggregates.md) — why `Product` stores a `SellerId`, not a `Seller`
-5. [Repositories](tutorial/05-repositories.md) — interfaces in the domain, sqlc in the infrastructure
+3. [Value objects, starting with Money](tutorial/03-value-objects.md) — why `double` money is a bug and what to do instead
+4. [Aggregates and their boundaries](tutorial/04-aggregates.md) — why `Product` stores a `sellerId`, not a `Seller`
+5. [Repositories](tutorial/05-repositories.md) — interfaces in the domain, `JdbcClient` in the infrastructure
 6. [CQRS, commands and queries](tutorial/06-cqrs.md) — separating writes from reads without going full event sourcing
 7. [Domain events and the outbox](tutorial/07-domain-events-outbox.md) — telling the rest of the world, reliably
 8. [Idempotent commands](tutorial/08-idempotency.md) — surviving client retries without duplicate writes
