@@ -23,14 +23,11 @@ And `double` has a second, quieter problem: **it's a bare number**. `19.99` of w
 
 ## The Money value object
 
-The fix, from [`domain/entities/Money.java`](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/domain/entities/Money.java): integer minor units, currency attached, and a record whose canonical constructor refuses invalid values.
+The fix, from [`domain/entities/Money.java`](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/domain/entities/Money.java): integer minor units, currency attached, and an enum that refuses invalid values.
 
 ```java
-public record Currency(String code) {
-
-    public static final Currency EUR = new Currency("EUR");
-    public static final Currency USD = new Currency("USD");
-    // ...
+public enum Currency {
+    EUR, USD
 }
 ```
 
@@ -101,11 +98,11 @@ A value object is only as good as its boundaries. Money constantly crosses proce
 @Override
 public Money deserialize(JsonParser parser, DeserializationContext context) {
     JsonNode node = context.readTree(parser);
-    JsonNode minorUnits = node.get("minor_units");
+    JsonNode minorUnits = node.get("price_minor_units");
     JsonNode currency = node.get("currency");
 
     if (minorUnits == null || !minorUnits.isIntegralNumber() || !minorUnits.canConvertToLong()) {
-        return context.reportInputMismatch(Money.class, "minor_units must be an integer");
+        return context.reportInputMismatch(Money.class, "price_minor_units must be an integer");
     }
     if (currency != null && !currency.isString()) {
         return context.reportInputMismatch(Money.class, "currency must be a string");

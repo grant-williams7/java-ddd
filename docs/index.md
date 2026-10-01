@@ -24,7 +24,7 @@ That's it. Everything else in this tutorial is those five ideas applied consiste
 
 ## How this tutorial works
 
-This isn't a theory course. Every chapter is anchored to a working codebase: [&lt;owner&gt;/java-ddd](https://github.com/<owner>/java-ddd), a production-grade template that models a small marketplace where sellers list products. It ships with a REST API (Spring MVC), PostgreSQL via JDBC and `JdbcClient`, Flyway migrations, Testcontainers-based integration tests, race-safe idempotent commands, and a transactional outbox for domain events. It's a Java and Spring Boot port of [go-ddd](https://github.com/sklinkert/go-ddd).
+This isn't a theory course. Every chapter is anchored to a working codebase: [grant-williams7/java-ddd](https://github.com/grant-williams7/java-ddd), a production-grade template that models a small marketplace where sellers list products. It ships with a REST API (Spring MVC), PostgreSQL via JDBC and `JdbcClient`, Flyway migrations, Testcontainers-based integration tests, race-safe idempotent commands, and a transactional outbox for domain events. It's a Java and Spring Boot port of [go-ddd](https://github.com/sklinkert/go-ddd).
 
 Each chapter shows the real code, explains why it's shaped that way, and tells you which trade-offs I made and where I'd decide differently in your situation. You can clone the repo and run everything locally with one command:
 

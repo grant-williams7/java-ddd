@@ -51,7 +51,7 @@ The pattern behind all three: **make the language do work**. Every time a busine
 Clone the repo and find the answers in the code — each should take under a minute, which is itself the point:
 
 ```bash
-git clone https://github.com/<owner>/java-ddd.git && cd java-ddd
+git clone https://github.com/grant-williams7/java-ddd.git && cd java-ddd
 ```
 
 1. What are *all* the rules for a valid product? (One method answers this: `validate()` in `domain/entities/Product.java`.)

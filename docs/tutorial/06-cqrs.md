@@ -52,6 +52,8 @@ The service *orchestrates*; it doesn't decide. Every business rule it appears to
 
 Notice also what the service *isn't*: it has no `@Service`, no `@Transactional`, no Spring import at all. The application layer is plain Java, and [`ApplicationWiring`](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/bootstrap/ApplicationWiring.java) turns it into beans in one place.
 
+(Note from Grant after the fact, I think not using `@Service` or `@Transactional` can be good practice, and I would generally encourage it. I'm internally torn on how much to prematurely un-springify)
+
 ## Queries
 
 The read side is deliberately thinner. A query names a question, and its result is a dumb shape:
