@@ -1,10 +1,10 @@
-site_name: go-ddd
-site_description: Learn Domain-Driven Design in Go with a production-ready template. Entities, value objects, aggregates, CQRS, domain events, and the transactional outbox, explained from zero.
-site_url: https://sklinkert.github.io/go-ddd/
+site_name: java-ddd
+site_description: Learn Domain-Driven Design in Java and Spring Boot with a production-ready template. Entities, value objects, aggregates, CQRS, domain events, and the transactional outbox, explained from zero.
+site_url: https://<owner>.github.io/java-ddd/
 site_author: Simon Klinkert
 
-repo_url: https://github.com/sklinkert/go-ddd
-repo_name: sklinkert/go-ddd
+repo_url: https://github.com/<owner>/java-ddd
+repo_name: <owner>/java-ddd
 edit_uri: edit/main/docs/
 
 theme:

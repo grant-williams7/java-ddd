@@ -13,18 +13,13 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot job: applies migrations, then exits.
-  migrate:
-    build: .
-    entrypoint: ["/app/migrate", "-command", "up"]
-    environment:
-      DATABASE_URL: postgres://marketplace:marketplace@postgres:5432/marketplace?sslmode=disable
-    depends_on:
-      postgres:
-        condition: service_healthy
-
+  # Applies pending Flyway migrations on startup, then serves traffic.
   app:
-    build: .
+    build:
+      context: .
+      secrets:
+        - maven_settings
+        - maven_settings_security
     environment:
       DATABASE_URL: postgres://marketplace:marketplace@postgres:5432/marketplace?sslmode=disable
       PORT: "8080"
@@ -33,5 +28,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+
+# Build-time only: Maven reads these to resolve dependencies through CFA JFrog.
+secrets:
+  maven_settings:
+    file: ${HOME}/.m2/settings.xml
+  maven_settings_security:
+    file: ${HOME}/.m2/settings-security.xml

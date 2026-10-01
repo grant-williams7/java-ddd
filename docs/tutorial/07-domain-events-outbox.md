@@ -2,13 +2,11 @@
 
 Here's a piece of code I've written, in some form, at three different companies:
 
-```go
-if err := s.repo.Create(ctx, product); err != nil {
-    return err
-}
+```java
+productRepository.create(product);
 
 // Tell the rest of the world
-return s.kafka.Publish(ctx, "product.created", toEvent(product))
+kafkaTemplate.send("product.created", toEvent(product));
 ```
 
 Save to Postgres, then publish to Kafka. It works in every demo, every test, and roughly 99.9% of the time in production. The remaining 0.1% is where the fun is: the database and the broker are two separate systems, and **no transaction spans both**.
@@ -22,42 +20,69 @@ You can't "just be careful" your way out. A retry loop shrinks the window; it do
 
 Before any infrastructure: who creates the event? In many codebases the service layer builds it, right next to the publish call. That's backwards. "A product was created" is a domain fact, and the aggregate is the thing that knows its own state changed. So the aggregate records events as part of the change:
 
-```go
-func NewProduct(name string, price Money, seller ValidatedSeller) *Product {
-    product := &Product{ /* ... */ }
+```java
+public static Product create(String name, Money price, ValidatedSeller seller) {
+    Instant now = Timestamps.now();
+    UUID sellerId = seller.seller().getId();
+    Product product = new Product(Uuids.newV7(), now, now, name, price, sellerId, List.of());
 
-    product.recordEvent(events.NewProductCreated(
-        product.Id, name, price.MinorUnits(), string(price.Currency()), seller.Id))
+    product.recordEvent(ProductCreated.of(
+            product.id, name, price.minorUnits(), price.currency().code(), sellerId));
 
-    return product
+    return product;
 }
 
-// PullEvents returns the recorded domain events and clears them.
-func (p *Product) PullEvents() []events.DomainEvent {
-    pulled := p.domainEvents
-    p.domainEvents = nil
-    return pulled
+/**
+ * Returns the recorded domain events and clears them. The repository stores
+ * them in the same transaction as the product (transactional outbox), so
+ * callers pull exactly once per save.
+ */
+public List<DomainEvent> pullEvents() {
+    List<DomainEvent> pulled = List.copyOf(domainEvents);
+    domainEvents.clear();
+    return pulled;
 }
 ```
 
-The events are dumb structs — past-tense names, immutable, no behavior ([`internal/domain/events/`](https://github.com/sklinkert/go-ddd/blob/main/internal/domain/events/product_events.go)):
+The events are dumb records — past-tense names, immutable, no behavior ([`domain/events/`](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/domain/events/ProductCreated.java)):
 
-```go
-type DomainEvent interface {
-    EventId() uuid.UUID
-    EventName() string
-    OccurredAt() time.Time
-    AggregateId() uuid.UUID
+```java
+public interface DomainEvent {
+
+    UUID eventId();
+
+    String eventName();
+
+    Instant occurredAt();
+
+    /** The aggregate the event belongs to. */
+    UUID aggregateId();
 }
-
-func (e ProductCreated) EventName() string { return "product.created" }
 ```
 
-Two details worth noticing. The event Id is a UUIDv7 — time-ordered, so it sorts nicely and doubles as a deduplication key for consumers. And `PullEvents` *clears* the slice, so the repository pulls exactly once per save and a retried save can't double-insert the same events.
+```java
+public record ProductCreated(
+        BaseEvent base,
+        String name,
+        long priceMinorUnits,
+        String currency,
+        UUID sellerId) implements DomainEvent {
+
+    public static final String NAME = "product.created";
+
+    @Override
+    public String eventName() {
+        return NAME;
+    }
+    // ...
+}
+```
+
+Two details worth noticing. The event Id is a UUIDv7 — time-ordered, so it sorts nicely and doubles as a deduplication key for consumers. And `pullEvents` *clears* the list, so the repository pulls exactly once per save and a retried save can't double-insert the same events.
 
 ## One transaction or it didn't happen
 
-The outbox table ([`migrations/000003_outbox.up.sql`](https://github.com/sklinkert/go-ddd/blob/main/migrations/000003_outbox.up.sql)) is deliberately simple:
+The outbox table ([`V3__outbox.sql`](https://github.com/<owner>/java-ddd/blob/main/src/main/resources/db/migration/V3__outbox.sql)) is deliberately simple:
 
 ```sql
 CREATE TABLE outbox_events (
@@ -75,52 +100,65 @@ CREATE INDEX idx_outbox_events_unpublished
 
 Note the **partial index**. The relay only ever asks one question — "unpublished events, oldest first" — while the table grows forever. An index on `WHERE published_at IS NULL` stays tiny no matter how many millions of published rows accumulate, because rows drop out of it the moment they're marked published.
 
-The payoff happens in the repository ([chapter 5](05-repositories.md) showed the transaction): aggregate insert and outbox insert share one `pgx` transaction.
+The payoff happens in the repository ([chapter 5](05-repositories.md) showed the transaction): aggregate insert and outbox insert share one JDBC transaction, run by a `TransactionTemplate`.
 
-```go
-qtx := repo.queries.WithTx(tx)
+```java
+return Objects.requireNonNull(transactions.execute(status -> {
+    jdbc.sql(CREATE_PRODUCT)
+            // ...
+            .query()
+            .singleRow();
 
-if _, err := qtx.CreateProduct(ctx, /* ... */); err != nil {
-    return nil, err
-}
+    outbox.insert(product.pullEvents());
 
-if err := insertOutboxEvents(ctx, qtx, product.PullEvents()); err != nil {
-    return nil, err
-}
-// ... read-back, then tx.Commit(ctx)
+    return findById(product.getId()).orElseThrow(() ->
+            new IllegalStateException("product " + product.getId() + " not readable after insert"));
+}));
 ```
 
-Either the product row *and* its events commit, or neither does. No orphaned product, no ghost event. And the service layer knows nothing about any of this — it calls `repo.Create` and the events ride along. **You can't forget to publish, because there is no publish step to forget.**
+Either the product row *and* its events commit, or neither does. No orphaned product, no ghost event. And the service layer knows nothing about any of this — it calls `productRepository.create` and the events ride along. **You can't forget to publish, because there is no publish step to forget.**
+
+The stored payload is the event as JSON (`{"eventId": …, "aggregateId": …, "occurredAt": …, "name": …, "priceMinorUnits": 4999, "currency": "EUR", "sellerId": …}`). Its shape is defined in infrastructure, by [`OutboxPayloads`](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/infrastructure/db/postgres/OutboxPayloads.java), so the domain event records stay free of serialization concerns.
 
 ## The relay: dumb on purpose
 
-Something still has to move events from Postgres to the broker. That's the [relay](https://github.com/sklinkert/go-ddd/blob/main/internal/infrastructure/outbox/relay.go) — a loop that polls unpublished rows and hands them to a `Publisher`:
+Something still has to move events from Postgres to the broker. That's the [relay](https://github.com/<owner>/java-ddd/blob/main/src/main/java/com/example/marketplace/infrastructure/outbox/OutboxRelay.java) — a scheduled method that polls unpublished rows and hands them to a `Publisher`:
 
-```go
-type Publisher interface {
-    Publish(ctx context.Context, eventName string, payload []byte) error
-}
+```java
+interface Publisher {
 
-func (r *Relay) relayBatch(ctx context.Context) error {
-    events, err := r.queries.GetUnpublishedOutboxEvents(ctx, r.batchSize)
-    if err != nil {
-        return err
-    }
-
-    for _, event := range events {
-        if err := r.publisher.Publish(ctx, event.EventName, event.Payload); err != nil {
-            // Stop the batch; unpublished events are retried next tick.
-            return err
-        }
-        if err := r.queries.MarkOutboxEventPublished(ctx, event.ID); err != nil {
-            return err
-        }
-    }
-    return nil
+    void publish(String eventName, String payload);
 }
 ```
 
-In the template the publisher just logs via `slog`; in production you swap in Kafka, NATS, SQS. The interesting property is the failure mode: publish succeeds, then `MarkOutboxEventPublished` fails — crash, network blip, deploy. Next tick, the row is still unpublished, so it publishes **again**.
+```java
+@Scheduled(initialDelay = 5, fixedRate = 5, timeUnit = TimeUnit.SECONDS)
+void relay() {
+    try {
+        relayBatch();
+    } catch (RuntimeException e) {
+        log.error("outbox relay batch failed error={}", e.toString());
+    }
+}
+
+void relayBatch() {
+    List<OutboxEvent> events = jdbc.sql(GET_UNPUBLISHED_OUTBOX_EVENTS)
+            .param("limit", BATCH_SIZE)
+            .query((row, rowNumber) -> new OutboxEvent(
+                    row.getObject("id", UUID.class),
+                    row.getString("event_name"),
+                    row.getString("payload")))
+            .list();
+
+    // A failure stops the batch; unpublished events are retried next tick.
+    for (OutboxEvent event : events) {
+        publisher.publish(event.eventName(), event.payload());
+        jdbc.sql(MARK_OUTBOX_EVENT_PUBLISHED).param("id", event.id()).update();
+    }
+}
+```
+
+In the template the publisher just logs via SLF4J; in production you swap in Kafka, NATS, SQS. The interesting property is the failure mode: publish succeeds, then marking the row published fails — crash, network blip, deploy. Next tick, the row is still unpublished, so it publishes **again**.
 
 That's not a bug; it's the contract: the outbox gives you **at-least-once** delivery, never exactly-once. Every consumer must be idempotent — handling `product.created` twice must equal handling it once. The event Id is the dedup key. If that sounds like a burden: you needed idempotent consumers anyway. Kafka redelivers on consumer-group rebalances all by itself. At-least-once is the honest default of distributed messaging; the outbox just stops pretending otherwise.
 
@@ -136,17 +174,17 @@ That's not a bug; it's the contract: the outbox gives you **at-least-once** deli
 
 ## When to skip all of this
 
-Often, honestly. If the "event handler" lives in the same process — creating a product should warm a cache — call the function; in-process, in-transaction, done. And if losing the occasional event is tolerable (analytics pings), fire-and-forget with a retry is genuinely fine.
+Often, honestly. If the "event handler" lives in the same process — creating a product should warm a cache — call the method; in-process, in-transaction, done. And if losing the occasional event is tolerable (analytics pings), fire-and-forget with a retry is genuinely fine.
 
 The outbox earns its keep exactly when a state change in *your* database must reliably reach *another* system. The moment someone says "when X happens here, Y must happen over there" — reach for it. It's maybe 200 lines including the migration, and it turns a distributed-systems problem into a table and a for loop.
 
-!!! tip "Standalone version"
-    I extracted a broker-agnostic implementation of this pattern into [go-outbox](https://github.com/sklinkert/go-outbox) if you want the outbox without the template.
+!!! tip "Packaged version"
+    If you'd rather not own this code, Spring's answer is the [Spring Modulith Event Publication Registry](https://docs.spring.io/spring-modulith/reference/events.html): it records events published with Spring's `ApplicationEventPublisher` in the same transaction and redelivers the incomplete ones. Same idea, different packaging.
 
 ## Try it
 
 1. Run the stack (`make docker-up`), create a product, and watch the relay log `publishing domain event` with `event_name=product.created`. Then check the row: `SELECT event_name, published_at FROM outbox_events;`
-2. Kill the app between insert and relay tick (set a long poll interval), restart, and confirm the event still goes out. That's the whole pattern in one experiment.
-3. Add a `ProductPriceChanged` event: record it in `UpdatePrice`, and check `Update` in the repository — does it insert outbox events today? (Look. This is a real extension point.)
+2. Kill the app between insert and relay tick (raise `fixedRate` in `OutboxRelay` for a long poll interval), restart, and confirm the event still goes out. That's the whole pattern in one experiment.
+3. Add a `ProductPriceChanged` event: record it in `updatePrice`, and check `update` in the repository — does it insert outbox events today? (Look. This is a real extension point.)
 
 Next: [idempotent commands](08-idempotency.md) — the other half of surviving retries, this time on the way *in*.

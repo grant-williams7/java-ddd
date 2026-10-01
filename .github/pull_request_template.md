@@ -9,7 +9,5 @@
 ## Checklist
 
 - [ ] `make test` passes (needs Docker)
-- [ ] `make lint` passes
-- [ ] `make vulncheck` passes
-- [ ] Schema changes include up + down migrations and regenerated sqlc code
+- [ ] Schema changes come as a new Flyway migration (`V<N>__description.sql`)
 - [ ] New behavior is covered by tests

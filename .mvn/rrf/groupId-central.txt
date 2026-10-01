@@ -1,0 +1,5 @@
+# Maven Central is never contacted directly: every artifact and every metadata
+# lookup must come through CFA JFrog (the repositories in ~/.m2/settings.xml).
+# Without a <mirror> in settings.xml, Maven would otherwise fall back to Central
+# for anything JFrog doesn't serve.
+!*

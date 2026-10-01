@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
-  title: go-ddd Marketplace API
+  title: java-ddd Marketplace API
   description: |
-    Example REST API of the go-ddd template. Sellers manage products.
+    Example REST API of the java-ddd template. Sellers manage products.
     Write endpoints (create, update, delete) are idempotent: send an
     `Idempotency-Key` header to make retries safe. A completed request with the
     same key replays its cached response; the same key with a different payload
@@ -11,7 +11,7 @@ info:
   version: "1.0.0"
   license:
     name: MIT
-    url: https://github.com/sklinkert/go-ddd/blob/main/LICENSE
+    url: https://github.com/<owner>/java-ddd/blob/main/LICENSE
 servers:
   - url: http://localhost:8080
 paths:
